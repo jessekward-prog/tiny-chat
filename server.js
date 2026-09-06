@@ -393,18 +393,29 @@ const PAGE = `<!doctype html>
     --font-ui:var(--mono); --font-body:var(--ibm);
   }
   *{box-sizing:border-box}
+  /* body is a flex row of #side/#col/#cfg; #cfg hides itself off-screen via a
+     negative right margin (below), which without this leaves the page itself
+     horizontally scrollable by that same 290px in some browsers. */
+  html,body{overflow:hidden}
   body{margin:0;height:100dvh;display:flex;background:var(--bg);color:var(--text);font:15px/1.55 var(--font-body);-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
   h1,h2,.pill,.card h2,#gt,label b,select#pick,button{font-family:var(--font-ui)}
   /* CRT scanlines — only the amber theme sets --scanline to 1. */
   body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:999;opacity:calc(var(--scanline) * .4);
     background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.08) 2px,rgba(0,0,0,.08) 4px)}
-  #side{position:relative;width:250px;flex:none;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left .2s cubic-bezier(.2,.7,.3,1)}
+  #side{position:relative;width:250px;flex:none;background:var(--surface);border-right:1px solid var(--border);overflow:hidden;transition:margin-left .2s cubic-bezier(.2,.7,.3,1)}
+  .side-content{position:relative;z-index:1;height:100%;display:flex;flex-direction:column}
+  /* Hostess theme only: same scanline treatment as the real hostess dashboard sidebar. */
+  .side-scanline{display:none;position:absolute;inset:0;pointer-events:none;z-index:0;mix-blend-mode:multiply;background:repeating-linear-gradient(0deg,rgba(0,0,0,.32) 0px,rgba(0,0,0,.32) 2px,transparent 2px,transparent 6px)}
+  html.theme-hostess .side-scanline{display:block}
   #side h2{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);margin:0;padding:0 14px 8px}
   #newBtn{margin:14px 12px 12px;padding:9px;font:inherit;font-size:13.5px;font-weight:600;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;cursor:pointer;transition:border-color .14s,background .14s}
   #newBtn:hover{border-color:var(--text-2);background:var(--them)}
   #list{flex:1;overflow-y:auto;padding:0 8px calc(12px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:2px}
-  .drawerX{display:none;position:absolute;top:10px;right:10px;width:30px;height:30px;border:1px solid var(--border);background:var(--bg);color:var(--text-2);border-radius:8px;cursor:pointer;font-size:18px;line-height:1;align-items:center;justify-content:center}
-  #scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:19}
+  /* In-flow, not absolute — an overlapping close button was covering #newBtn
+     underneath it, so the only way to dismiss a drawer was tapping outside it. */
+  .drawer-bar{display:none;justify-content:flex-end;padding:8px 8px 0 0}
+  .drawerX{width:30px;height:30px;border:1px solid var(--border);background:var(--bg);color:var(--text-2);border-radius:8px;cursor:pointer;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center;flex:none}
+  #scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:19}
   .item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:9px;cursor:pointer;font-size:13.5px;color:var(--text-2);transition:background .12s,color .12s}
   .item:hover{background:var(--them);color:var(--text)}
   .item.on{background:var(--them);color:var(--text);font-weight:500}
@@ -446,7 +457,7 @@ const PAGE = `<!doctype html>
   @media(max-width:980px){
     #cfg{position:fixed;inset:0 0 0 auto;z-index:20;box-shadow:0 0 40px rgba(0,0,0,.4)}
     body.cfg #scrim{display:block}
-    .drawerX.cfgX{display:flex}
+    #cfg .drawer-bar{display:flex}
     #gear{width:40px;height:40px;font-size:17px}
   }
   #burger,#gear{display:none;align-items:center;justify-content:center;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px;line-height:1;flex:none}
@@ -457,16 +468,22 @@ const PAGE = `<!doctype html>
     body.nav #side{margin-left:0}
     body.nav #scrim{display:block}
     #burger{display:flex;width:40px;height:40px;font-size:17px}
-    .drawerX.sideX{display:flex}
+    #side .drawer-bar{display:flex}
     #t{font-size:16px}
     #b{min-height:44px}
   }
   header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface)}
-  header h1{font-size:15px;font-weight:600;margin:0;flex:1;letter-spacing:-.01em;white-space:nowrap}
-  @media(max-width:1150px){ .pill{display:none} }
+  header h1{font-size:15px;font-weight:600;margin:0;flex:1;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   select#pick{font:inherit;font-size:12px;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 8px;max-width:230px;outline:none;cursor:pointer}
   select#pick:focus{border-color:var(--text-2)}
-  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-2);background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:999px}
+  /* This unconditional rule must come BEFORE the max-width:1150px query below —
+     equal specificity means source order decides, and with this declared after
+     it silently won on every viewport, so the "hide on mobile" rule never took
+     effect. Only surfaced once a real model was linked, since "not linked" was
+     short enough to never visibly wrap. */
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-2);background:var(--bg);border:1px solid var(--border);padding:4px 10px;border-radius:999px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+  @media(max-width:1150px){ .pill{display:none} }
+  @media(max-width:760px){ select#pick{max-width:130px} }
   .dot{width:7px;height:7px;border-radius:50%;background:var(--off);flex:none}
   .dot.on{background:var(--ok)}
   main{flex:1;overflow-y:auto;padding:22px 18px;display:flex;flex-direction:column;gap:12px}
@@ -512,10 +529,13 @@ const PAGE = `<!doctype html>
 </div></div>
 <div id="scrim"></div>
 <aside id="side">
-  <button class="drawerX sideX" id="sideClose" type="button" aria-label="Close">&times;</button>
-  <button id="newBtn" type="button">+ New chat</button>
-  <h2>History</h2>
-  <div id="list"></div>
+  <div class="side-scanline"></div>
+  <div class="side-content">
+    <div class="drawer-bar"><button class="drawerX" id="sideClose" type="button" aria-label="Close">&times;</button></div>
+    <button id="newBtn" type="button">+ New chat</button>
+    <h2>History</h2>
+    <div id="list"></div>
+  </div>
 </aside>
 <div id="col">
 <header>
@@ -532,7 +552,7 @@ const PAGE = `<!doctype html>
 </form></footer>
 </div>
 <aside id="cfg">
-  <button class="drawerX cfgX" id="cfgClose" type="button" aria-label="Close">&times;</button>
+  <div class="drawer-bar"><button class="drawerX" id="cfgClose" type="button" aria-label="Close">&times;</button></div>
   <div class="fld">
     <label><b>Theme</b></label>
     <div class="swatches" id="themeSw">
@@ -583,10 +603,63 @@ const PAGE = `<!doctype html>
   document.getElementById('sideClose').addEventListener('click',closeDrawers);
   document.getElementById('cfgClose').addEventListener('click',closeDrawers);
 
+  // Ported from hostess's own dashboard sidebar (mountWaveBackground in
+  // ~/hostess/public/index.html, itself from chat-cmd's WaveBackground.jsx) —
+  // same sine-band + particle canvas, only run while the hostess theme is on
+  // screen so it isn't animating forever behind the other three themes.
+  function mountSideWave(container){
+    const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const canvas=document.createElement('canvas');
+    canvas.style.cssText='position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none';
+    container.prepend(canvas);
+    const ctx=canvas.getContext('2d');
+    const parts=Array.from({length:20},()=>({x:Math.random(),y:Math.random(),r:0.4+Math.random()*1.3,s:0.02+Math.random()*0.05}));
+    const bands=[
+      {amp:40,len:0.9,sp:0.18,y:0.5,a:0.06,color:'176,176,176'},
+      {amp:65,len:0.6,sp:0.12,y:0.6,a:0.05,color:'102,102,102'},
+      {amp:85,len:0.4,sp:0.08,y:0.7,a:0.035,color:'68,68,68'},
+    ];
+    let t=0, raf=null, stopped=false;
+    function size(){ const d=window.devicePixelRatio||1; canvas.width=container.clientWidth*d; canvas.height=container.clientHeight*d; ctx.setTransform(d,0,0,d,0,0); }
+    size();
+    const ro=new ResizeObserver(size); ro.observe(container);
+    function draw(){
+      if(stopped) return;
+      t+=reduceMotion?0.00075:0.001;
+      const W=container.clientWidth,H=container.clientHeight;
+      ctx.clearRect(0,0,W,H);
+      bands.forEach(b=>{
+        ctx.beginPath();
+        for(let x=0;x<=W;x+=8){
+          const p=x/W;
+          const y=H*b.y+Math.sin(p*6.28*b.len+t/b.sp)*b.amp+Math.sin(p*15.7*b.len-(t/b.sp)*1.7)*b.amp*0.3;
+          x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+        }
+        ctx.strokeStyle='rgba('+b.color+','+Math.min(b.a*5,0.9)+')';
+        ctx.lineWidth=1.5;
+        ctx.stroke();
+      });
+      parts.forEach(p=>{
+        p.y-=p.s*0.002;
+        if(p.y<-0.02){ p.y=1.02; p.x=Math.random(); }
+        ctx.beginPath();
+        ctx.arc(p.x*W,p.y*H,p.r,0,6.28);
+        ctx.fillStyle='rgba(232,132,10,0.16)';
+        ctx.fill();
+      });
+      raf=requestAnimationFrame(draw);
+    }
+    draw();
+    return ()=>{ stopped=true; if(raf) cancelAnimationFrame(raf); ro.disconnect(); canvas.remove(); };
+  }
+  let stopSideWave=null;
+
   const themeSw=document.getElementById('themeSw');
   function applyTheme(t){
     document.documentElement.className=t==='light'?'':'theme-'+t;
     themeSw.querySelectorAll('button').forEach(el=>el.classList.toggle('on',el.dataset.theme===t));
+    if(t==='hostess'&&!stopSideWave) stopSideWave=mountSideWave(side);
+    else if(t!=='hostess'&&stopSideWave){ stopSideWave(); stopSideWave=null; }
     try{localStorage.setItem('tc-theme',t);}catch(e){}
   }
   themeSw.querySelectorAll('button').forEach(el=>el.addEventListener('click',()=>applyTheme(el.dataset.theme)));
