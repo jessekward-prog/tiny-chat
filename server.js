@@ -18,7 +18,7 @@ const DATA_DIR = process.env.DATA_DIR || '/app/data';
 const PIN_FILE = path.join(fs.existsSync(DATA_DIR) ? DATA_DIR : __dirname, 'pin.json');
 
 const SETTINGS_FILE = path.join(fs.existsSync(DATA_DIR) ? DATA_DIR : __dirname, 'settings.json');
-const DEFAULT_SETTINGS = { systemPrompt: '', temperature: 0.7, topP: 1, maxTokens: 0, webSearch: false };
+const DEFAULT_SETTINGS = { systemPrompt: '', temperature: 0.7, topP: 1, maxTokens: 0, webSearch: false, memory: false };
 // Fleet-wide name, the same one llm-cmd uses. Not auto-detected by Hostess, so
 // it must be declared in app.yaml's env: list.
 const SEARX = (process.env.SEARXNG_URL || '').trim().replace(/\/+$/, '');
@@ -34,6 +34,7 @@ function writeSettings(next) {
     topP: Math.min(1, Math.max(0.01, Number(next.topP) || 1)),
     maxTokens: Math.max(0, Math.floor(Number(next.maxTokens) || 0)),   // 0 = let the model decide
     webSearch: !!next.webSearch,
+    memory: !!next.memory,
   };
   fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
   const tmp = `${SETTINGS_FILE}.tmp`;
@@ -56,6 +57,68 @@ function writeChats(chats) {
   fs.renameSync(tmp, CHATS_FILE);
 }
 const titleFrom = (text) => (text || 'New chat').replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat';
+
+// Facts learned passively across every chat, not scoped to one — that's the
+// whole point: a question in a brand new chat can still resolve against
+// something only ever mentioned in a different one.
+const MEMORY_FILE = path.join(fs.existsSync(DATA_DIR) ? DATA_DIR : __dirname, 'memory.json');
+const MAX_FACTS = 60;
+
+function readFacts() {
+  try { return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); } catch { return []; }
+}
+function writeFacts(facts) {
+  fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
+  const tmp = `${MEMORY_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(facts));
+  fs.renameSync(tmp, MEMORY_FILE);
+}
+function addFacts(texts) {
+  const facts = readFacts();
+  for (const text of texts) {
+    facts.push({ id: crypto.randomBytes(6).toString('hex'), text: text.slice(0, 240), createdAt: Date.now() });
+  }
+  writeFacts(facts.slice(-MAX_FACTS));
+}
+function memoryHint() {
+  const facts = readFacts();
+  if (!facts.length) return '';
+  const lines = facts.map((f) => `- ${f.text}`).join('\n').slice(0, 2500);
+  return `Things learned from earlier conversations with this user. Use them only if relevant; don't mention this list exists:\n${lines}`;
+}
+
+// Fired without awaiting, after a reply is already on its way back — never
+// makes the user wait for extraction, and a failure here is invisible and
+// harmless. Reuses whichever model just answered rather than a dedicated
+// extractor model, since there's no unload endpoint to free one afterward.
+async function extractFacts(userText, replyText, model) {
+  const { url, key } = lm();
+  if (!url) return;
+  try {
+    const res = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) },
+      body: JSON.stringify({
+        model: model || undefined,
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: 'Extract up to 3 short, self-contained facts from this exchange that the user might reasonably ask about again in a LATER, unrelated conversation — specific numbers, choices, plans or names they mentioned, even minor or short-term ones. Each one must stand alone as a full statement, e.g. "Making a spinach and feta omelette with 4 eggs tonight" — never split into fragments like "4 eggs" or "tonight" on their own. Skip generic pleasantries, opinions with no concrete detail, and anything about the assistant itself. Reply with ONLY a JSON array of short strings, nothing else. If there is truly nothing concrete, reply with [].' },
+          { role: 'user', content: `User: ${userText}\nAssistant: ${replyText}` },
+        ],
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return;
+    const facts = JSON.parse(match[0]).filter((f) => typeof f === 'string' && f.trim()).slice(0, 3);
+    if (facts.length) addFacts(facts);
+  } catch {
+    // Best-effort only — a slow/unavailable model just means nothing new is learned this round.
+  }
+}
 
 function readPin() {
   try { return JSON.parse(fs.readFileSync(PIN_FILE, 'utf8')); } catch { return null; }
@@ -165,7 +228,8 @@ function searchContext(query, results) {
 async function chat(messages, override) {
   const cfg = readSettings();
   const { url, key, model: def } = lm();
-  const prepared = cfg.systemPrompt ? [{ role: 'system', content: cfg.systemPrompt }, ...messages] : [...messages];
+  const sys = [cfg.systemPrompt, cfg.memory ? memoryHint() : ''].filter(Boolean).join('\n\n');
+  const prepared = sys ? [{ role: 'system', content: sys }, ...messages] : [...messages];
   const model = override || def;
   if (!url) throw new Error('No model endpoint configured on this deployment.');
   const res = await fetch(`${url}/v1/chat/completions`, {
@@ -284,6 +348,19 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { settings: writeSettings(body) });
   }
 
+  if (url.pathname === '/api/memory' && req.method === 'GET') {
+    return json(res, 200, { facts: readFacts() });
+  }
+  if (url.pathname === '/api/memory' && req.method === 'DELETE') {
+    writeFacts([]);
+    return json(res, 200, { ok: true });
+  }
+  const factMatch = /^\/api\/memory\/([a-f0-9]{12})$/.exec(url.pathname);
+  if (factMatch && req.method === 'DELETE') {
+    writeFacts(readFacts().filter((f) => f.id !== factMatch[1]));
+    return json(res, 200, { ok: true });
+  }
+
   if (url.pathname === '/api/models') {
     try { return json(res, 200, { models: await listModels(), current: lm().model || null }); }
     catch (err) { return json(res, 502, { error: err.message }); }
@@ -315,7 +392,14 @@ const server = http.createServer(async (req, res) => {
           sources = { error: err.message };   // a dead backend must not take the reply down
         }
       }
-      return json(res, 200, { reply: await chat(augmented, body?.model), sources });
+      const reply = await chat(augmented, body?.model);
+      json(res, 200, { reply, sources });
+      const cfg2 = readSettings();
+      if (cfg2.memory) {
+        const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+        extractFacts(lastUser, reply, body?.model || lm().model);
+      }
+      return;
     } catch (err) {
       return json(res, 502, { error: err.message });
     }
@@ -444,6 +528,13 @@ const PAGE = `<!doctype html>
   .fld textarea{resize:vertical;min-height:84px;line-height:1.5}
   .fld input:focus,.fld textarea:focus{border-color:var(--text-2)}
   .fld .hint{font-size:11.5px;color:var(--text-2);margin-top:5px;line-height:1.45}
+  .memHead{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-2);margin-top:8px}
+  .memHead a{cursor:pointer;text-decoration:underline}
+  .memHead a:hover{color:var(--text)}
+  .fact{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--text-2);padding:6px 0;border-top:1px solid var(--border)}
+  .fact span{flex:1;line-height:1.4}
+  .fact button{flex:none;border:0;background:none;color:var(--text-2);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
+  .fact button:hover{color:var(--err)}
   #saved{font-size:11.5px;color:var(--ok);opacity:0;transition:opacity .2s}
   #saved.on{opacity:1}
   .swatches{display:flex;gap:9px}
@@ -566,6 +657,11 @@ const PAGE = `<!doctype html>
   <div class="fld" id="fWeb">
     <label><b>Web search</b><input id="sWeb" type="checkbox"></label>
     <div class="hint" id="hWeb">Searches before answering and passes the results in as context — the model is never asked to fetch anything itself.</div>
+  </div>
+  <div class="fld" id="fMem">
+    <label><b>Memory</b><input id="sMem" type="checkbox"></label>
+    <div class="hint">After each reply, quietly pulls out a few durable facts and carries them into every future chat — so a new conversation can still pick up on something only mentioned in an old one.</div>
+    <div id="memList"></div>
   </div>
   <div class="fld">
     <label><b>System prompt</b></label>
@@ -810,9 +906,11 @@ const PAGE = `<!doctype html>
   const sWeb=document.getElementById('sWeb'), fWeb=document.getElementById('fWeb'), hWeb=document.getElementById('hWeb');
   gear.addEventListener('click',()=>document.body.classList.toggle('cfg'));
 
+  const sMem=document.getElementById('sMem'), memList=document.getElementById('memList');
+
   function showCfg(c){
     sSys.value=c.systemPrompt||''; sTemp.value=c.temperature; sTop.value=c.topP; sMax.value=c.maxTokens||0;
-    sWeb.checked=!!c.webSearch;
+    sWeb.checked=!!c.webSearch; sMem.checked=!!c.memory;
     vTemp.textContent=Number(c.temperature).toFixed(2); vTop.textContent=Number(c.topP).toFixed(2);
   }
   function loadCfg(){ fetch('/api/settings').then(r=>r.json()).then(d=>{
@@ -820,6 +918,23 @@ const PAGE = `<!doctype html>
     if(!d.searchAvailable){
       fWeb.classList.add('off'); sWeb.checked=false; sWeb.disabled=true;
       hWeb.textContent='Unavailable — this deployment has no SEARXNG_URL set, so there is no search backend to reach.';
+    }
+  }).catch(()=>{}); loadMemory(); }
+
+  function loadMemory(){ fetch('/api/memory').then(r=>r.json()).then(d=>{
+    const facts=d.facts||[];
+    memList.innerHTML='';
+    if(!facts.length) return;
+    const head=document.createElement('div'); head.className='memHead';
+    head.innerHTML='<span>'+facts.length+' learned</span><a>Clear all</a>';
+    head.querySelector('a').addEventListener('click',async()=>{ await fetch('/api/memory',{method:'DELETE'}); loadMemory(); });
+    memList.append(head);
+    for(const f of facts.slice().reverse()){
+      const row=document.createElement('div'); row.className='fact';
+      const span=document.createElement('span'); span.textContent=f.text;
+      const del=document.createElement('button'); del.type='button'; del.textContent='×'; del.setAttribute('aria-label','Forget');
+      del.addEventListener('click',async()=>{ await fetch('/api/memory/'+f.id,{method:'DELETE'}); loadMemory(); });
+      row.append(span,del); memList.append(row);
     }
   }).catch(()=>{}); }
 
@@ -829,12 +944,12 @@ const PAGE = `<!doctype html>
     clearTimeout(cfgTimer);
     cfgTimer=setTimeout(async()=>{
       const d=await fetch('/api/settings',{method:'PUT',headers:{'content-type':'application/json'},
-        body:JSON.stringify({systemPrompt:sSys.value,temperature:sTemp.value,topP:sTop.value,maxTokens:sMax.value,webSearch:sWeb.checked})
+        body:JSON.stringify({systemPrompt:sSys.value,temperature:sTemp.value,topP:sTop.value,maxTokens:sMax.value,webSearch:sWeb.checked,memory:sMem.checked})
       }).then(r=>r.json()).catch(()=>null);
       if(d&&d.settings){ showCfg(d.settings); savedTag.classList.add('on'); setTimeout(()=>savedTag.classList.remove('on'),1200); }
     },400);
   }
-  for(const el of [sSys,sTemp,sTop,sMax,sWeb]) el.addEventListener('input',saveCfg);
+  for(const el of [sSys,sTemp,sTop,sMax,sWeb,sMem]) el.addEventListener('input',saveCfg);
 
   fetch('/api/state').then(r=>r.json()).then(st=>{
     if(st.needsSetup||st.locked) showGate(st.needsSetup); else { loadStatus(); loadModels(); refresh(true); loadCfg(); }
