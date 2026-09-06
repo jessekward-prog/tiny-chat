@@ -625,12 +625,22 @@ const PAGE = `<!doctype html>
         if(m.id===d.current) o.selected=true;
         pick.append(o);
       }
+      syncPill();
     }).catch(()=>{pick.style.display='none'});
   }
 
+  // The pill showed the operator's default even after switching models, so the
+  // two disagreed. It now reflects whatever is actually about to be used.
+  let lmHost='';
+  function syncPill(){
+    if(!lmHost) return;
+    stat.textContent=(pick.value||'linked')+' @ '+lmHost;
+  }
+  pick.addEventListener('change',syncPill);
+
   function loadStatus(){
     fetch('/api/status').then(r=>r.json()).then(s=>{
-      if(s.configured){ dot.classList.add('on'); stat.textContent=(s.model||'linked')+' @ '+s.host; }
+      if(s.configured){ dot.classList.add('on'); lmHost=s.host; stat.textContent=(s.model||'linked')+' @ '+s.host; syncPill(); }
       else { stat.textContent='not linked'; banner('<b>No model endpoint.</b> This app has no settings of its own — the host platform has not supplied one.'); }
     }).catch(()=>{stat.textContent='status unavailable'});
   }
