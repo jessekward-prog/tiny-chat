@@ -347,25 +347,64 @@ server.listen(PORT, '0.0.0.0', () => {
 
 const PAGE = `<!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Tiny Chat</title>
+<script>
+// Applied before first paint so a stored theme (or the OS preference, first
+// visit) never flashes the light default first.
+(function(){try{
+  var t=localStorage.getItem('tc-theme');
+  if(!t) t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+  if(t!=='light') document.documentElement.classList.add('theme-'+t);
+}catch(e){}})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg:#f7f7f8; --surface:#fff; --border:#e4e4e7; --text:#18181b; --text-2:#71717a;
     --me:#18181b; --me-text:#fff; --them:#f1f1f3; --ok:#16a34a; --off:#a1a1aa; --err:#dc2626;
-    --radius:14px; --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --radius:14px; --scanline:0;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+    --ibm:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --font-ui:var(--sans); --font-body:var(--sans);
   }
-  @media (prefers-color-scheme:dark){:root{
+  /* Explicit theme picked in settings always wins. With none stored yet, the
+     inline head script above falls back to the OS preference on first paint. */
+  html.theme-dark {
     --bg:#09090b; --surface:#131316; --border:#27272a; --text:#fafafa; --text-2:#a1a1aa;
-    --me:#fafafa; --me-text:#09090b; --them:#1f1f23; --off:#52525b;
-  }}
+    --me:#fafafa; --me-text:#09090b; --them:#1f1f23; --off:#52525b; --ok:#22c55e; --err:#f87171;
+  }
+  /* Burnt-amber CRT — same phosphor palette as this fleet's other terminal-styled
+     apps (llm-cmd). Monospace throughout and a scanline overlay is what sells it,
+     not just the color swap. */
+  html.theme-amber {
+    --bg:#0e0a00; --surface:#1a1200; --border:#3d2e00; --text:#e8a040; --text-2:#a57d00;
+    --me:#e8840a; --me-text:#0e0a00; --them:#241a00; --ok:#4ade80; --off:#826200; --err:#f87171;
+    --font-ui:var(--mono); --font-body:var(--mono); --scanline:1;
+  }
+  /* Matches hostess.cmdward.xyz/rules.html: black/white mono chrome, IBM Plex
+     Sans for reading text, the same ok/err accents as its compliance tags. */
+  html.theme-hostess {
+    --bg:#000000; --surface:#111111; --border:#2c2c2c; --text:#ffffff; --text-2:#767676;
+    --me:#ffffff; --me-text:#000000; --them:#1e1e1e; --ok:#3fb37f; --off:#474747; --err:#e0564f;
+    --font-ui:var(--mono); --font-body:var(--ibm);
+  }
   *{box-sizing:border-box}
-  body{margin:0;height:100dvh;display:flex;background:var(--bg);color:var(--text);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
-  #side{width:250px;flex:none;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left .2s cubic-bezier(.2,.7,.3,1)}
+  body{margin:0;height:100dvh;display:flex;background:var(--bg);color:var(--text);font:15px/1.55 var(--font-body);-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
+  h1,h2,.pill,.card h2,#gt,label b,select#pick,button{font-family:var(--font-ui)}
+  /* CRT scanlines — only the amber theme sets --scanline to 1. */
+  body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:999;opacity:calc(var(--scanline) * .4);
+    background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.08) 2px,rgba(0,0,0,.08) 4px)}
+  #side{position:relative;width:250px;flex:none;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left .2s cubic-bezier(.2,.7,.3,1)}
   #side h2{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);margin:0;padding:0 14px 8px}
   #newBtn{margin:14px 12px 12px;padding:9px;font:inherit;font-size:13.5px;font-weight:600;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;cursor:pointer;transition:border-color .14s,background .14s}
   #newBtn:hover{border-color:var(--text-2);background:var(--them)}
-  #list{flex:1;overflow-y:auto;padding:0 8px 12px;display:flex;flex-direction:column;gap:2px}
+  #list{flex:1;overflow-y:auto;padding:0 8px calc(12px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:2px}
+  .drawerX{display:none;position:absolute;top:10px;right:10px;width:30px;height:30px;border:1px solid var(--border);background:var(--bg);color:var(--text-2);border-radius:8px;cursor:pointer;font-size:18px;line-height:1;align-items:center;justify-content:center}
+  #scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:19}
   .item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:9px;cursor:pointer;font-size:13.5px;color:var(--text-2);transition:background .12s,color .12s}
   .item:hover{background:var(--them);color:var(--text)}
   .item.on{background:var(--them);color:var(--text);font-weight:500}
@@ -376,7 +415,7 @@ const PAGE = `<!doctype html>
   .item.empty{color:var(--text-2);cursor:default;font-size:12.5px;padding:10px}
   .item.empty:hover{background:none}
   #col{flex:1;min-width:0;display:flex;flex-direction:column}
-  #cfg{width:290px;flex:none;background:var(--surface);border-left:1px solid var(--border);overflow-y:auto;padding:18px 16px;transition:margin-right .2s cubic-bezier(.2,.7,.3,1)}
+  #cfg{position:relative;width:290px;flex:none;background:var(--surface);border-left:1px solid var(--border);overflow-y:auto;padding:18px 16px calc(18px + env(safe-area-inset-bottom));transition:margin-right .2s cubic-bezier(.2,.7,.3,1)}
   body:not(.cfg) #cfg{margin-right:-290px}
   #cfg h2{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);margin:0 0 14px}
   .fld{margin-bottom:16px}
@@ -396,14 +435,31 @@ const PAGE = `<!doctype html>
   .fld .hint{font-size:11.5px;color:var(--text-2);margin-top:5px;line-height:1.45}
   #saved{font-size:11.5px;color:var(--ok);opacity:0;transition:opacity .2s}
   #saved.on{opacity:1}
-  @media(max-width:980px){#cfg{position:fixed;inset:0 0 0 auto;z-index:20;box-shadow:0 0 40px rgba(0,0,0,.4)}}
-  #burger,#gear{display:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px;line-height:1;flex:none}
-  #gear{display:block}
+  .swatches{display:flex;gap:9px}
+  .swatches button{width:30px;height:30px;border-radius:50%;border:2px solid var(--border);cursor:pointer;padding:0;background:var(--sw,var(--surface))}
+  .swatches button.on{border-color:var(--text)}
+  #themeSw button[data-theme=light]{--sw:linear-gradient(135deg,#fff 50%,#e4e4e7 50%)}
+  #themeSw button[data-theme=dark]{--sw:linear-gradient(135deg,#131316 50%,#09090b 50%)}
+  #themeSw button[data-theme=amber]{--sw:linear-gradient(135deg,#1a1200 50%,#e8840a 50%)}
+  #themeSw button[data-theme=hostess]{--sw:linear-gradient(135deg,#111 50%,#3fb37f 50%)}
+  #themeSw button{background:var(--sw)}
+  @media(max-width:980px){
+    #cfg{position:fixed;inset:0 0 0 auto;z-index:20;box-shadow:0 0 40px rgba(0,0,0,.4)}
+    body.cfg #scrim{display:block}
+    .drawerX.cfgX{display:flex}
+    #gear{width:40px;height:40px;font-size:17px}
+  }
+  #burger,#gear{display:none;align-items:center;justify-content:center;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px;line-height:1;flex:none}
+  #gear{display:flex}
   body.cfg #gear{border-color:var(--text-2)}
   @media(max-width:760px){
     #side{position:fixed;inset:0 auto 0 0;z-index:20;margin-left:-250px;box-shadow:0 0 40px rgba(0,0,0,.4)}
     body.nav #side{margin-left:0}
-    #burger{display:block}
+    body.nav #scrim{display:block}
+    #burger{display:flex;width:40px;height:40px;font-size:17px}
+    .drawerX.sideX{display:flex}
+    #t{font-size:16px}
+    #b{min-height:44px}
   }
   header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surface)}
   header h1{font-size:15px;font-weight:600;margin:0;flex:1;letter-spacing:-.01em;white-space:nowrap}
@@ -428,7 +484,7 @@ const PAGE = `<!doctype html>
   .typing i{width:6px;height:6px;border-radius:50%;background:var(--text-2);animation:blink 1.3s infinite}
   .typing i:nth-child(2){animation-delay:.18s} .typing i:nth-child(3){animation-delay:.36s}
   @keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}
-  footer{border-top:1px solid var(--border);background:var(--surface);padding:12px 18px}
+  footer{border-top:1px solid var(--border);background:var(--surface);padding:12px 18px calc(12px + env(safe-area-inset-bottom))}
   form{max-width:680px;margin:0 auto;display:flex;gap:9px;align-items:flex-end}
   textarea{flex:1;resize:none;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--border);border-radius:11px;padding:10px 13px;max-height:140px;outline:none;transition:border-color .14s}
   textarea:focus{border-color:var(--text-2)}
@@ -436,7 +492,7 @@ const PAGE = `<!doctype html>
   button:disabled{opacity:.4;cursor:default}
   button:not(:disabled):active{transform:scale(.97)}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-  #gate{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;z-index:10}
+  #gate{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));z-index:10}
   #gate.show{display:flex}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px 26px;width:100%;max-width:330px;text-align:center}
   .card h2{margin:0 0 6px;font-size:16px;font-weight:600;letter-spacing:-.01em}
@@ -454,7 +510,9 @@ const PAGE = `<!doctype html>
   <div class="err" id="ge"></div>
   <button id="gb" type="button">Continue</button>
 </div></div>
+<div id="scrim"></div>
 <aside id="side">
+  <button class="drawerX sideX" id="sideClose" type="button" aria-label="Close">&times;</button>
   <button id="newBtn" type="button">+ New chat</button>
   <h2>History</h2>
   <div id="list"></div>
@@ -474,6 +532,16 @@ const PAGE = `<!doctype html>
 </form></footer>
 </div>
 <aside id="cfg">
+  <button class="drawerX cfgX" id="cfgClose" type="button" aria-label="Close">&times;</button>
+  <div class="fld">
+    <label><b>Theme</b></label>
+    <div class="swatches" id="themeSw">
+      <button data-theme="light" type="button" title="Light" aria-label="Light theme"></button>
+      <button data-theme="dark" type="button" title="Dark" aria-label="Dark theme"></button>
+      <button data-theme="amber" type="button" title="Amber CRT" aria-label="Amber CRT theme"></button>
+      <button data-theme="hostess" type="button" title="Hostess" aria-label="Hostess theme"></button>
+    </div>
+  </div>
   <h2>Model settings</h2>
   <div class="fld" id="fWeb">
     <label><b>Web search</b><input id="sWeb" type="checkbox"></label>
@@ -508,6 +576,22 @@ const PAGE = `<!doctype html>
   const side=document.getElementById('side'), list=document.getElementById('list');
   const newBtn=document.getElementById('newBtn'), burger=document.getElementById('burger');
   burger.addEventListener('click',()=>document.body.classList.toggle('nav'));
+
+  const scrim=document.getElementById('scrim');
+  const closeDrawers=()=>document.body.classList.remove('nav','cfg');
+  scrim.addEventListener('click',closeDrawers);
+  document.getElementById('sideClose').addEventListener('click',closeDrawers);
+  document.getElementById('cfgClose').addEventListener('click',closeDrawers);
+
+  const themeSw=document.getElementById('themeSw');
+  function applyTheme(t){
+    document.documentElement.className=t==='light'?'':'theme-'+t;
+    themeSw.querySelectorAll('button').forEach(el=>el.classList.toggle('on',el.dataset.theme===t));
+    try{localStorage.setItem('tc-theme',t);}catch(e){}
+  }
+  themeSw.querySelectorAll('button').forEach(el=>el.addEventListener('click',()=>applyTheme(el.dataset.theme)));
+  applyTheme((()=>{ try{return localStorage.getItem('tc-theme');}catch(e){return null;} })()
+    || (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));
 
   function when(ts){
     const m=Math.floor((Date.now()-ts)/60000);
