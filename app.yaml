@@ -2,4 +2,5 @@ name: tiny-chat
 port: 8080
 dataDir: /app/data
 search: true
+autoUpdate: true
 description: Minimal chat UI with no configuration of its own — the model endpoint comes entirely from the host platform.
